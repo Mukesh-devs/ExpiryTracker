@@ -83,9 +83,9 @@ fun DetailScreen(
         editNotes = data.notes
         editPurchasedDate = data.purchasedDate
         editExpiryDate = data.expiryDate
-        editUsername = if (data.username.isNotBlank()) CryptoManager.decrypt(data.username) else ""
-        editEmail = if (data.email.isNotBlank()) CryptoManager.decrypt(data.email) else ""
-        editPassword = if (data.password.isNotBlank()) CryptoManager.decrypt(data.password) else ""
+        editUsername = data.username // if (data.username.isNotBlank()) CryptoManager.decrypt(data.username) else ""
+        editEmail = data.email       // if (data.email.isNotBlank()) CryptoManager.decrypt(data.email) else ""
+        editPassword = data.password // if (data.password.isNotBlank()) CryptoManager.decrypt(data.password) else ""
         editAmount = data.amount
         isEditing = true
     }
@@ -400,9 +400,9 @@ fun DetailScreen(
                                     purchasedDate = editPurchasedDate!!,
                                     expiryDate = editExpiryDate!!,
                                     notes = editNotes,
-                                    username = CryptoManager.encrypt(editUsername),
-                                    email = CryptoManager.encrypt(editEmail),
-                                    password = CryptoManager.encrypt(editPassword),
+                                    username = editUsername, // CryptoManager.encrypt(editUsername),
+                                    email = editEmail,       // CryptoManager.encrypt(editEmail),
+                                    password = editPassword, // CryptoManager.encrypt(editPassword),
                                     amount = editAmount,
                                     ownerId = item?.ownerId ?: userId,
                                     ownerUsername = item?.ownerUsername ?: "",
@@ -417,9 +417,9 @@ fun DetailScreen(
                                     "purchasedDate" to editPurchasedDate!!,
                                     "expiryDate" to editExpiryDate!!,
                                     "notes" to editNotes,
-                                    "username" to CryptoManager.encrypt(editUsername),
-                                    "email" to CryptoManager.encrypt(editEmail),
-                                    "password" to CryptoManager.encrypt(editPassword),
+                                    "username" to editUsername, // CryptoManager.encrypt(editUsername),
+                                    "email" to editEmail,       // CryptoManager.encrypt(editEmail),
+                                    "password" to editPassword, // CryptoManager.encrypt(editPassword),
                                     "amount" to editAmount
                                 )
 
@@ -636,7 +636,7 @@ fun DetailScreen(
                                     DetailInfoRow(
                                         icon = Icons.Outlined.Person,
                                         label = "Username",
-                                        value = CryptoManager.decrypt(data.username),
+                                        value = data.username, // CryptoManager.decrypt(data.username),
                                         accentColor = accentColor
                                     )
                                 }
@@ -645,7 +645,7 @@ fun DetailScreen(
                                     DetailInfoRow(
                                         icon = Icons.Outlined.Email,
                                         label = "Email",
-                                        value = CryptoManager.decrypt(data.email),
+                                        value = data.email, // CryptoManager.decrypt(data.email),
                                         accentColor = accentColor
                                     )
                                 }
@@ -680,7 +680,7 @@ fun DetailScreen(
                                             )
                                             Text(
                                                 text = if (passwordVisible)
-                                                    CryptoManager.decrypt(data.password)
+                                                    data.password // CryptoManager.decrypt(data.password)
                                                 else "••••••••",
                                                 style = MaterialTheme.typography.bodyMedium.copy(
                                                     fontWeight = FontWeight.Medium
