@@ -261,9 +261,10 @@ fun MainContainer() {
                     composable("add") { AddItemScreen(navController) }
                     composable("profile") { ProfileScreen(navController) }
                     composable("about") { AboutScreen() }
-                    composable("detail/{itemId}") { backStackEntry ->
+                    composable("detail/{itemId}/{ownerId}") { backStackEntry ->
                         val itemId = backStackEntry.arguments?.getString("itemId") ?: ""
-                        DetailScreen(itemId, navController)
+                        val ownerId = backStackEntry.arguments?.getString("ownerId") ?: ""
+                        DetailScreen(itemId, ownerId, navController)
                     }
                 }
             }
@@ -289,9 +290,10 @@ fun MainContainer() {
             composable("profile") { ProfileScreen(navController) }
             composable("about") { AboutScreen() }
 
-            composable("detail/{itemId}") { backStackEntry ->
+            composable("detail/{itemId}/{ownerId}") { backStackEntry ->
                 val itemId = backStackEntry.arguments?.getString("itemId") ?: ""
-                DetailScreen(itemId, navController)
+                val ownerId = backStackEntry.arguments?.getString("ownerId") ?: ""
+                DetailScreen(itemId, ownerId, navController)
             }
         }
     }

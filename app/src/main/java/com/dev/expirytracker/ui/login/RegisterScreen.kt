@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,12 +25,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.dev.expirytracker.config.AppConfig
+import com.dev.expirytracker.model.User
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 
 @Composable
 fun RegisterScreen(navController: NavController) {
 
     var email by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -37,6 +42,7 @@ fun RegisterScreen(navController: NavController) {
     var isLoading by remember { mutableStateOf(false) }
 
     val auth = FirebaseAuth.getInstance()
+    val db = FirebaseFirestore.getInstance()
 
     val accentColor = Color(0xFF1565C0)
     val gradient = Brush.verticalGradient(
@@ -44,7 +50,8 @@ fun RegisterScreen(navController: NavController) {
     )
 
     val passwordsMatch = password == confirmPassword
-    val formValid = email.isNotBlank() && password.length >= 6 && passwordsMatch && confirmPassword.isNotBlank()
+    val usernameValid = username.length >= 3 && username.all { it.isLowerCase() || it.isDigit() || it == '_' }
+    val formValid = email.isNotBlank() && usernameValid && password.length >= 6 && passwordsMatch && confirmPassword.isNotBlank()
 
     Box(
         modifier = Modifier
@@ -123,6 +130,38 @@ fun RegisterScreen(navController: NavController) {
                             focusedLabelColor = accentColor,
                             cursorColor = accentColor
                         )
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it.lowercase() },
+                        label = { Text("Username") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Person,
+                                contentDescription = null,
+                                tint = accentColor
+                            )
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = accentColor,
+                            focusedLabelColor = accentColor,
+                            cursorColor = accentColor
+                        ),
+                        supportingText = {
+                            if (username.isNotEmpty() && !usernameValid) {
+                                Text(
+                                    "Min 3 chars, only a-z, 0-9, _",
+                                    color = Color(0xFFE53935),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -235,20 +274,47 @@ fun RegisterScreen(navController: NavController) {
                 onClick = {
                     if (!isLoading && formValid) {
                         isLoading = true
-                        auth.createUserWithEmailAndPassword(email, password)
-                            .addOnSuccessListener {
-                                isLoading = false
-                                navController.navigate("home") {
-                                    popUpTo("register") { inclusive = true }
+                        
+                        // Check if username already exists
+                        db.collection(AppConfig.USERS_COLLECTION)
+                            .whereEqualTo("username", username)
+                            .get()
+                            .addOnSuccessListener { documents ->
+                                if (documents.isEmpty) {
+                                    // Username is unique, proceed with registration
+                                    auth.createUserWithEmailAndPassword(email, password)
+                                        .addOnSuccessListener { authResult ->
+                                            val newUser = User(
+                                                uid = authResult.user?.uid ?: "",
+                                                email = email,
+                                                username = username
+                                            )
+                                            db.collection(AppConfig.USERS_COLLECTION)
+                                                .document(newUser.uid)
+                                                .set(newUser)
+                                                .addOnSuccessListener {
+                                                    isLoading = false
+                                                    navController.navigate("home") {
+                                                        popUpTo("register") { inclusive = true }
+                                                    }
+                                                }
+                                                .addOnFailureListener {
+                                                    isLoading = false
+                                                    Toast.makeText(navController.context, it.message, Toast.LENGTH_SHORT).show()
+                                                }
+                                        }
+                                        .addOnFailureListener {
+                                            isLoading = false
+                                            Toast.makeText(navController.context, it.message, Toast.LENGTH_SHORT).show()
+                                        }
+                                } else {
+                                    isLoading = false
+                                    Toast.makeText(navController.context, "Username already taken", Toast.LENGTH_SHORT).show()
                                 }
                             }
                             .addOnFailureListener {
                                 isLoading = false
-                                Toast.makeText(
-                                    navController.context,
-                                    it.message,
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                                Toast.makeText(navController.context, it.message, Toast.LENGTH_SHORT).show()
                             }
                     }
                 },

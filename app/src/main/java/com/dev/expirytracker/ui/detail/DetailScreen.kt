@@ -1,6 +1,7 @@
 package com.dev.expirytracker.ui.detail
 
 import android.widget.Toast
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -9,11 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,12 +25,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.navigation.NavController
 import com.dev.expirytracker.config.AppConfig
 import com.dev.expirytracker.model.ExpiryItem
 import com.dev.expirytracker.ui.home.calculateDaysLeft
 import com.dev.expirytracker.util.CryptoManager
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import java.text.SimpleDateFormat
 import java.util.*
@@ -42,6 +41,7 @@ import java.util.*
 @Composable
 fun DetailScreen(
     itemId: String,
+    ownerId: String,
     navController: NavController
 ) {
 
@@ -58,6 +58,12 @@ fun DetailScreen(
     var isLoading by remember { mutableStateOf(true) }
     var showDialog by remember { mutableStateOf(false) }
     var passwordVisible by remember { mutableStateOf(false) }
+
+    var showShareDialog by remember { mutableStateOf(false) }
+    var shareUsername by remember { mutableStateOf("") }
+    var usernameSuggestions by remember { mutableStateOf(listOf<String>()) }
+    var showSuggestions by remember { mutableStateOf(false) }
+    var currentUserUsername by remember { mutableStateOf("") }
 
     // ── Edit Mode State ──
     var isEditing by remember { mutableStateOf(false) }
@@ -84,25 +90,60 @@ fun DetailScreen(
         isEditing = true
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(userId) {
         db.collection(AppConfig.USERS_COLLECTION)
             .document(userId)
+            .get()
+            .addOnSuccessListener {
+                currentUserUsername = it.getString("username") ?: ""
+            }
+    }
+
+    LaunchedEffect(shareUsername) {
+        if (shareUsername.length >= 2) {
+            db.collection(AppConfig.USERS_COLLECTION)
+                .whereGreaterThanOrEqualTo("username", shareUsername)
+                .whereLessThanOrEqualTo("username", shareUsername + "\uf8ff")
+                .limit(5)
+                .get()
+                .addOnSuccessListener { documents ->
+                    usernameSuggestions = documents.mapNotNull { it.getString("username") }
+                        .filter { it != currentUserUsername && !(item?.sharedWith?.contains(it) ?: false) }
+                    showSuggestions = usernameSuggestions.isNotEmpty()
+                }
+        } else {
+            showSuggestions = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        db.collection(AppConfig.USERS_COLLECTION)
+            .document(ownerId)
             .collection(AppConfig.ITEMS_COLLECTION)
             .document(itemId)
             .get()
-            .addOnSuccessListener {
-                item = ExpiryItem(
-                    id = it.id,
-                    name = it.getString("name") ?: "",
-                    purchasedDate = it.getLong("purchasedDate") ?: 0L,
-                    expiryDate = it.getLong("expiryDate") ?: 0L,
-                    notes = it.getString("notes") ?: "",
-                    username = it.getString("username") ?: "",
-                    email = it.getString("email") ?: "",
-                    password = it.getString("password") ?: "",
-                    amount = it.getString("amount") ?: ""
-                )
+            .addOnSuccessListener { doc ->
+                if (doc.exists()) {
+                    item = ExpiryItem(
+                        id = doc.id,
+                        name = doc.getString("name") ?: "",
+                        purchasedDate = doc.getLong("purchasedDate") ?: 0L,
+                        expiryDate = doc.getLong("expiryDate") ?: 0L,
+                        notes = doc.getString("notes") ?: "",
+                        username = doc.getString("username") ?: "",
+                        email = doc.getString("email") ?: "",
+                        password = doc.getString("password") ?: "",
+                        amount = doc.getString("amount") ?: "",
+                        ownerId = doc.getString("ownerId") ?: "",
+                        ownerUsername = doc.getString("ownerUsername") ?: "",
+                        sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList()
+                    )
+                }
                 isLoading = false
+            }
+            .addOnFailureListener {
+                isLoading = false
+                Toast.makeText(context, "Error: ${it.message}", Toast.LENGTH_LONG).show()
             }
     }
 
@@ -362,7 +403,10 @@ fun DetailScreen(
                                     username = CryptoManager.encrypt(editUsername),
                                     email = CryptoManager.encrypt(editEmail),
                                     password = CryptoManager.encrypt(editPassword),
-                                    amount = editAmount
+                                    amount = editAmount,
+                                    ownerId = item?.ownerId ?: userId,
+                                    ownerUsername = item?.ownerUsername ?: "",
+                                    sharedWith = item?.sharedWith ?: emptyList()
                                 )
                                 isEditing = false
                                 Toast.makeText(context, "Item updated", Toast.LENGTH_SHORT).show()
@@ -380,7 +424,7 @@ fun DetailScreen(
                                 )
 
                                 db.collection(AppConfig.USERS_COLLECTION)
-                                    .document(userId)
+                                    .document(item?.ownerId ?: userId)
                                     .collection(AppConfig.ITEMS_COLLECTION)
                                     .document(itemId)
                                     .update(updated)
@@ -443,11 +487,16 @@ fun DetailScreen(
                         ),
                         color = Color(0xFF0D47A1)
                     )
-                    Text(
-                        text = "Item details",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF64B5F6)
-                    )
+                    
+                    val isOwner = data.ownerId == userId || data.ownerId.isEmpty()
+                    
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (isOwner) "My Item" else "Shared by ${data.ownerUsername}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isOwner) Color(0xFF64B5F6) else Color(0xFF4CAF50)
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(20.dp))
 
@@ -667,40 +716,101 @@ fun DetailScreen(
                         }
                     }
 
+                    // ── Shared With Section (For Owner) ──
+                    if (isOwner && data.sharedWith.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(20.dp)) {
+                                SectionLabel("SHARED WITH")
+                                Spacer(modifier = Modifier.height(10.dp))
+                                
+                                data.sharedWith.forEach { sharedUser ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Outlined.Person, null, tint = Color.Gray, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(text = sharedUser, style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                        IconButton(onClick = {
+                                            db.collection(AppConfig.USERS_COLLECTION)
+                                                .document(userId)
+                                                .collection(AppConfig.ITEMS_COLLECTION)
+                                                .document(itemId)
+                                                .update("sharedWith", FieldValue.arrayRemove(sharedUser))
+                                                .addOnSuccessListener {
+                                                    Toast.makeText(context, "Removed $sharedUser", Toast.LENGTH_SHORT).show()
+                                                    item = item?.copy(sharedWith = data.sharedWith.filter { it != sharedUser })
+                                                }
+                                        }) {
+                                            Icon(Icons.Default.Close, null, tint = Color(0xFFE53935), modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(80.dp))
                 }
 
-                // ── FABs: Edit + Delete ──
+                // ── FABs: Share + Edit + Delete ──
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(end = 20.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Edit FAB
-                    FloatingActionButton(
-                        onClick = { enterEditMode(data) },
-                        containerColor = accentColor,
-                        contentColor = Color.White,
-                        shape = CircleShape
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Edit"
-                        )
-                    }
+                    val isOwnerFab = data.ownerId == userId || data.ownerId.isEmpty()
+                    if (isOwnerFab) {
+                        // Share FAB
+                        FloatingActionButton(
+                            onClick = { showShareDialog = true },
+                            containerColor = Color(0xFF4CAF50),
+                            contentColor = Color.White,
+                            shape = CircleShape
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Share"
+                            )
+                        }
 
-                    // Delete FAB
-                    FloatingActionButton(
-                        onClick = { showDialog = true },
-                        containerColor = Color(0xFFE53935),
-                        contentColor = Color.White,
-                        shape = CircleShape
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "Delete"
-                        )
+                        // Edit FAB
+                        FloatingActionButton(
+                            onClick = { enterEditMode(data) },
+                            containerColor = accentColor,
+                            contentColor = Color.White,
+                            shape = CircleShape
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit"
+                            )
+                        }
+
+                        // Delete FAB
+                        FloatingActionButton(
+                            onClick = { showDialog = true },
+                            containerColor = Color(0xFFE53935),
+                            contentColor = Color.White,
+                            shape = CircleShape
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Delete"
+                            )
+                        }
                     }
                 }
             }
@@ -747,6 +857,105 @@ fun DetailScreen(
                 dismissButton = {
                     OutlinedButton(
                         onClick = { showDialog = false },
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        // ── Share Dialog ──
+        if (showShareDialog) {
+            AlertDialog(
+                onDismissRequest = { showShareDialog = false },
+                shape = RoundedCornerShape(24.dp),
+                containerColor = Color.White,
+                title = {
+                    Text(
+                        "Share Item",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0D47A1)
+                    )
+                },
+                text = {
+                    Column {
+                        Text(
+                            "Enter the username of the person you want to share this item with.",
+                            color = Color(0xFF546E7A),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Box {
+                            OutlinedTextField(
+                                value = shareUsername,
+                                onValueChange = { shareUsername = it.lowercase() },
+                                label = { Text("Recipient Username") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            
+                            if (showSuggestions) {
+                                Card(
+                                    modifier = Modifier
+                                        .padding(top = 64.dp)
+                                        .fillMaxWidth()
+                                        .zIndex(1f),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                                ) {
+                                    Column {
+                                        usernameSuggestions.forEach { suggestion ->
+                                            Text(
+                                                text = suggestion,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        shareUsername = suggestion
+                                                        showSuggestions = false
+                                                    }
+                                                    .padding(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (shareUsername.isNotBlank()) {
+                                db.collection(AppConfig.USERS_COLLECTION)
+                                    .document(item?.ownerId?.ifBlank { userId } ?: userId)
+                                    .collection(AppConfig.ITEMS_COLLECTION)
+                                    .document(itemId)
+                                    .update("sharedWith", FieldValue.arrayUnion(shareUsername))
+                                    .addOnSuccessListener {
+                                        Toast.makeText(context, "Item shared with $shareUsername", Toast.LENGTH_SHORT).show()
+                                        showShareDialog = false
+                                        shareUsername = ""
+                                        // Update local state
+                                        item = item?.copy(sharedWith = (item?.sharedWith ?: emptyList()) + shareUsername)
+                                    }
+                                    .addOnFailureListener {
+                                        Toast.makeText(context, "Failed to share: ${it.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF4CAF50)
+                        ),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("Share")
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(
+                        onClick = { showShareDialog = false },
                         shape = RoundedCornerShape(14.dp)
                     ) {
                         Text("Cancel")

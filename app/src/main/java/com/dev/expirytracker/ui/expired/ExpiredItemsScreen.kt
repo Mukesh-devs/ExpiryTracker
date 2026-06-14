@@ -63,7 +63,9 @@ fun ExpiredItemsScreen(navController: NavController) {
                                 email = doc.getString("email") ?: "",
                                 password = doc.getString("password") ?: "",
                                 amount = doc.getString("amount") ?: "",
-                                archived = true
+                                archived = true,
+                                ownerId = doc.getString("ownerId") ?: userId,
+                                sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList()
                             )
                         } else null
                     }
@@ -176,7 +178,7 @@ fun ExpiredItemsScreen(navController: NavController) {
                             .delete()
                         Toast.makeText(context, "${item.name} deleted", Toast.LENGTH_SHORT).show()
                     },
-                    onClick = { navController.navigate("detail/${item.id}") }
+                    onClick = { navController.navigate("detail/${item.id}/${item.ownerId}") }
                 )
             }
         }

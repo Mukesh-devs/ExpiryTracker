@@ -57,6 +57,7 @@ fun HomeScreen(navController: NavController) {
 
     val db = FirebaseFirestore.getInstance()
     val userId = FirebaseAuth.getInstance().currentUser!!.uid
+    val userEmail = FirebaseAuth.getInstance().currentUser?.email ?: ""
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -64,35 +65,79 @@ fun HomeScreen(navController: NavController) {
         colors = listOf(Color(0xFFF5F9FF), Color(0xFFE8F1FC))
     )
 
-    var items by remember { mutableStateOf(listOf<ExpiryItem>()) }
+    var myItems by remember { mutableStateOf(listOf<ExpiryItem>()) }
+    var sharedItems by remember { mutableStateOf(listOf<ExpiryItem>()) }
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: My Items, 1: Shared
+
     var isLoading by remember { mutableStateOf(true) }
     var isRefreshing by remember { mutableStateOf(false) }
 
+    val displayedItems = if (selectedTab == 0) myItems else sharedItems
+
     fun loadItems() {
+        // Fetch current user's username
         db.collection(AppConfig.USERS_COLLECTION)
             .document(userId)
-            .collection(AppConfig.ITEMS_COLLECTION)
-            .addSnapshotListener { result, _ ->
-                result?.let {
-                    val list = it.documents.mapNotNull { doc ->
-                        val archived = doc.getBoolean("archived") ?: false
-                        if (archived) return@mapNotNull null
-                        ExpiryItem(
-                            id = doc.id,
-                            name = doc.getString("name") ?: "",
-                            purchasedDate = doc.getLong("purchasedDate") ?: 0L,
-                            expiryDate = doc.getLong("expiryDate") ?: 0L,
-                            notes = doc.getString("notes") ?: "",
-                            username = doc.getString("username") ?: "",
-                            email = doc.getString("email") ?: "",
-                            password = doc.getString("password") ?: "",
-                            amount = doc.getString("amount") ?: "",
-                            archived = false
-                        )
+            .get()
+            .addOnSuccessListener { userDoc ->
+                val currentUserUsername = userDoc.getString("username") ?: ""
+
+                // Fetch My Items
+                db.collection(AppConfig.USERS_COLLECTION)
+                    .document(userId)
+                    .collection(AppConfig.ITEMS_COLLECTION)
+                    .addSnapshotListener { result, _ ->
+                        result?.let {
+                            myItems = it.documents.mapNotNull { doc ->
+                                val archived = doc.getBoolean("archived") ?: false
+                                if (archived) return@mapNotNull null
+                                ExpiryItem(
+                                    id = doc.id,
+                                    name = doc.getString("name") ?: "",
+                                    purchasedDate = doc.getLong("purchasedDate") ?: 0L,
+                                    expiryDate = doc.getLong("expiryDate") ?: 0L,
+                                    notes = doc.getString("notes") ?: "",
+                                    username = doc.getString("username") ?: "",
+                                    email = doc.getString("email") ?: "",
+                                    password = doc.getString("password") ?: "",
+                                    amount = doc.getString("amount") ?: "",
+                                    ownerId = doc.getString("ownerId") ?: userId,
+                                    ownerUsername = doc.getString("ownerUsername") ?: "",
+                                    sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList(),
+                                    archived = false
+                                )
+                            }.sortedBy { calculateDaysLeft(it.expiryDate) }
+                            isLoading = false
+                            isRefreshing = false
+                        }
                     }
-                    items = list.sortedBy { calculateDaysLeft(it.expiryDate) }
-                    isLoading = false
-                    isRefreshing = false
+
+                // Fetch Shared Items (By username)
+                if (currentUserUsername.isNotEmpty()) {
+                    db.collectionGroup(AppConfig.ITEMS_COLLECTION)
+                        .whereArrayContains("sharedWith", currentUserUsername)
+                        .whereEqualTo("archived", false)
+                        .addSnapshotListener { result, _ ->
+                            result?.let {
+                                sharedItems = it.documents.map { doc ->
+                                    ExpiryItem(
+                                        id = doc.id,
+                                        name = doc.getString("name") ?: "",
+                                        purchasedDate = doc.getLong("purchasedDate") ?: 0L,
+                                        expiryDate = doc.getLong("expiryDate") ?: 0L,
+                                        notes = doc.getString("notes") ?: "",
+                                        username = doc.getString("username") ?: "",
+                                        email = doc.getString("email") ?: "",
+                                        password = doc.getString("password") ?: "",
+                                        amount = doc.getString("amount") ?: "",
+                                        ownerId = doc.getString("ownerId") ?: "",
+                                        ownerUsername = doc.getString("ownerUsername") ?: "",
+                                        sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList(),
+                                        archived = false
+                                    )
+                                }.sortedBy { calculateDaysLeft(it.expiryDate) }
+                            }
+                        }
                 }
             }
     }
@@ -136,7 +181,7 @@ fun HomeScreen(navController: NavController) {
                     ) {
                         Column {
                             Text(
-                                text = "My Items",
+                                text = "Expiry Tracker",
                                 style = MaterialTheme.typography.headlineMedium.copy(
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = (-0.5).sp
@@ -144,7 +189,10 @@ fun HomeScreen(navController: NavController) {
                                 color = Color(0xFF0D47A1)
                             )
                             Text(
-                                text = "${items.size} item${if (items.size != 1) "s" else ""} tracked",
+                                text = if (selectedTab == 0) 
+                                    "${myItems.size} item${if (myItems.size != 1) "s" else ""} owned"
+                                else 
+                                    "${sharedItems.size} item${if (sharedItems.size != 1) "s" else ""} shared",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color(0xFF64B5F6)
                             )
@@ -164,36 +212,28 @@ fun HomeScreen(navController: NavController) {
                         }
                     }
 
-                    // ── Summary Chips ──
-                    if (items.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            val expired = items.count { calculateDaysLeft(it.expiryDate) <= 0 }
-                            val urgent = items.count { calculateDaysLeft(it.expiryDate) in 1..10 }
-                            val safe = items.count { calculateDaysLeft(it.expiryDate) > 10 }
+                    Spacer(modifier = Modifier.height(20.dp))
 
-                            SummaryChip(
-                                label = "Expired",
-                                count = expired,
-                                color = Color(0xFFEF5350),
-                                modifier = Modifier.weight(1f)
-                            )
-                            SummaryChip(
-                                label = "Urgent",
-                                count = urgent,
-                                color = Color(0xFFFFA726),
-                                modifier = Modifier.weight(1f)
-                            )
-                            SummaryChip(
-                                label = "Safe",
-                                count = safe,
-                                color = Color(0xFF66BB6A),
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
+                    // ── Tab Switcher ──
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xFFE3F2FD))
+                            .padding(4.dp)
+                    ) {
+                        TabButton(
+                            text = "My Items",
+                            selected = selectedTab == 0,
+                            onClick = { selectedTab = 0 },
+                            modifier = Modifier.weight(1f)
+                        )
+                        TabButton(
+                            text = "Shared",
+                            selected = selectedTab == 1,
+                            onClick = { selectedTab = 1 },
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
             }
@@ -216,7 +256,7 @@ fun HomeScreen(navController: NavController) {
             }
 
             // ── Empty State ──
-            if (!isLoading && items.isEmpty()) {
+            if (!isLoading && displayedItems.isEmpty()) {
                 item {
                     Column(
                         modifier = Modifier
@@ -232,14 +272,17 @@ fun HomeScreen(navController: NavController) {
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = "No items yet",
+                            text = if (selectedTab == 0) "No items yet" else "No shared items",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF90CAF9)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Tap + to add your first expiry item",
+                            text = if (selectedTab == 0) 
+                                "Tap + to add your first expiry item"
+                            else 
+                                "Items shared with you will appear here",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color(0xFFB0BEC5)
                         )
@@ -248,10 +291,11 @@ fun HomeScreen(navController: NavController) {
             }
 
             // ── Item Cards ──
-            items(items, key = { it.id }) { item ->
+            items(displayedItems, key = { it.id }) { item ->
                 val isExpired = calculateDaysLeft(item.expiryDate) <= 0
 
-                if (isExpired) {
+                // Only allow swipe to archive for owned items
+                if (isExpired && selectedTab == 0) {
                     val dismissState = rememberSwipeToDismissBoxState(
                         confirmValueChange = { dismissValue ->
                             if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
@@ -303,14 +347,15 @@ fun HomeScreen(navController: NavController) {
                     ) {
                         ItemCard(
                             item = item,
-                            onClick = { navController.navigate("detail/${item.id}") },
+                            onClick = { navController.navigate("detail/${item.id}/${item.ownerId}") },
                             isExpired = true
                         )
                     }
                 } else {
                     ItemCard(
                         item = item,
-                        onClick = { navController.navigate("detail/${item.id}") }
+                        onClick = { navController.navigate("detail/${item.id}/${item.ownerId}") },
+                        isExpired = isExpired
                     )
                 }
             }
@@ -324,6 +369,44 @@ fun HomeScreen(navController: NavController) {
                     .align(Alignment.TopCenter),
                 color = Color(0xFF1565C0),
                 trackColor = Color(0xFF1565C0).copy(alpha = 0.1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun TabButton(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val backgroundColor by animateColorAsState(
+        targetValue = if (selected) Color(0xFF1565C0) else Color.Transparent,
+        label = "bgColor"
+    )
+    val textColor by animateColorAsState(
+        targetValue = if (selected) Color.White else Color(0xFF1565C0),
+        label = "textColor"
+    )
+
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick),
+        color = backgroundColor,
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Box(
+            modifier = Modifier.padding(vertical = 10.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.Bold
+                ),
+                color = textColor
             )
         }
     }
@@ -449,7 +532,7 @@ private fun ItemCard(item: ExpiryItem, onClick: () -> Unit, isExpired: Boolean =
                 )
             }
 
-            // Swipe hint for expired items
+            // Swipe hint for expired items (only for owned items)
             if (isExpired) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
@@ -474,39 +557,6 @@ private fun ItemCard(item: ExpiryItem, onClick: () -> Unit, isExpired: Boolean =
                     )
                 }
             }
-        }
-    }
-}
-
-// ── Summary Chip ──
-@Composable
-private fun SummaryChip(
-    label: String,
-    count: Int,
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        color = color.copy(alpha = 0.1f)
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = "$count",
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = FontWeight.Bold
-                ),
-                color = color
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = color.copy(alpha = 0.8f)
-            )
         }
     }
 }

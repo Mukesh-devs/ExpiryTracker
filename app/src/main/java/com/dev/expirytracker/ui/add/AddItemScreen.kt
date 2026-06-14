@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.navigation.NavController
 import com.dev.expirytracker.config.AppConfig
 import com.dev.expirytracker.util.CryptoManager
@@ -49,19 +50,50 @@ fun AddItemScreen(navController: NavController) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
+    var shareEmail by remember { mutableStateOf("") }
+    var usernameSuggestions by remember { mutableStateOf(listOf<String>()) }
+    var showSuggestions by remember { mutableStateOf(false) }
+
+    val db = FirebaseFirestore.getInstance()
+    val userId = FirebaseAuth.getInstance().currentUser!!.uid
+    var currentUserUsername by remember { mutableStateOf("") }
+
+    LaunchedEffect(userId) {
+        db.collection(AppConfig.USERS_COLLECTION)
+            .document(userId)
+            .get()
+            .addOnSuccessListener {
+                currentUserUsername = it.getString("username") ?: ""
+            }
+    }
+
+    LaunchedEffect(shareEmail) {
+        if (shareEmail.length >= 2) {
+            db.collection(AppConfig.USERS_COLLECTION)
+                .whereGreaterThanOrEqualTo("username", shareEmail)
+                .whereLessThanOrEqualTo("username", shareEmail + "\uf8ff")
+                .limit(5)
+                .get()
+                .addOnSuccessListener { documents ->
+                    usernameSuggestions = documents.mapNotNull { it.getString("username") }
+                        .filter { it != currentUserUsername }
+                    showSuggestions = usernameSuggestions.isNotEmpty()
+                }
+        } else {
+            showSuggestions = false
+        }
+    }
 
     var showUsername by remember { mutableStateOf(false) }
     var showEmail by remember { mutableStateOf(false) }
     var showPassword by remember { mutableStateOf(false) }
     var showAmount by remember { mutableStateOf(false) }
+    var showShareEmail by remember { mutableStateOf(false) }
     var showDropdown by remember { mutableStateOf(false) }
 
     var isSaving by remember { mutableStateOf(false) }
     var showPurchasePicker by remember { mutableStateOf(false) }
     var showExpiryPicker by remember { mutableStateOf(false) }
-
-    val db = FirebaseFirestore.getInstance()
-    val userId = FirebaseAuth.getInstance().currentUser!!.uid
 
     val formatter = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
 
@@ -71,8 +103,8 @@ fun AddItemScreen(navController: NavController) {
     val accentColor = Color(0xFF1565C0)
     val cardColor = Color.White
 
-    val hasAnyCredential = showUsername || showEmail || showPassword || showAmount
-    val allCredentialsAdded = showUsername && showEmail && showPassword && showAmount
+    val hasAnyCredential = showUsername || showEmail || showPassword || showAmount || showShareEmail
+    val allCredentialsAdded = showUsername && showEmail && showPassword && showAmount && showShareEmail
 
     Box(
         modifier = Modifier
@@ -274,6 +306,16 @@ fun AddItemScreen(navController: NavController) {
                                             }
                                         )
                                     }
+                                    if (!showShareEmail) {
+                                        CredentialDropdownItem(
+                                            icon = Icons.Outlined.Share,
+                                            label = "Share with (Username)",
+                                            onClick = {
+                                                showShareEmail = true
+                                                showDropdown = false
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -363,6 +405,69 @@ fun AddItemScreen(navController: NavController) {
                             amount = ""
                         }
                     )
+
+                    // ── Share with Username Field with Suggestions ──
+                    AnimatedVisibility(
+                        visible = showShareEmail,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Column {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Box {
+                                OutlinedTextField(
+                                    value = shareEmail,
+                                    onValueChange = { shareEmail = it.lowercase() },
+                                    label = { Text("Share with Username") },
+                                    leadingIcon = {
+                                        Icon(Icons.Outlined.Share, null, tint = accentColor)
+                                    },
+                                    trailingIcon = {
+                                        IconButton(onClick = {
+                                            showShareEmail = false
+                                            shareEmail = ""
+                                        }) {
+                                            Icon(Icons.Default.Close, null, tint = Color(0xFFE57373))
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = accentColor,
+                                        focusedLabelColor = accentColor,
+                                        cursorColor = accentColor
+                                    ),
+                                    singleLine = true
+                                )
+
+                                if (showSuggestions) {
+                                    Card(
+                                        modifier = Modifier
+                                            .padding(top = 64.dp)
+                                            .fillMaxWidth()
+                                            .zIndex(1f),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                                    ) {
+                                        Column {
+                                            usernameSuggestions.forEach { suggestion ->
+                                                Text(
+                                                    text = suggestion,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            shareEmail = suggestion
+                                                            showSuggestions = false
+                                                        }
+                                                        .padding(16.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -400,7 +505,11 @@ fun AddItemScreen(navController: NavController) {
                             "username" to CryptoManager.encrypt(username),
                             "email" to CryptoManager.encrypt(email),
                             "password" to CryptoManager.encrypt(password),
-                            "amount" to amount
+                            "amount" to amount,
+                            "ownerId" to userId,
+                            "ownerUsername" to currentUserUsername,
+                            "sharedWith" to if (shareEmail.isNotBlank()) listOf(shareEmail) else emptyList<String>(),
+                            "archived" to false
                         )
 
                         db.collection(AppConfig.USERS_COLLECTION)
