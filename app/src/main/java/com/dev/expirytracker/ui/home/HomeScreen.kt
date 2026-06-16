@@ -14,10 +14,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Inventory2
-import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.MailOutline
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.SwipeLeft
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,8 +34,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import com.dev.expirytracker.config.AppConfig
 import com.dev.expirytracker.model.ExpiryItem
+import com.dev.expirytracker.service.SharingService
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.delay
@@ -41,13 +45,15 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
 
-fun formatDate(timestamp: Long): String {
+fun formatDate(timestamp: Timestamp?): String {
+    if (timestamp == null) return "—"
     val sdf = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
-    return sdf.format(Date(timestamp))
+    return sdf.format(timestamp.toDate())
 }
 
-fun calculateDaysLeft(expiryDate: Long): Long {
-    val diff = expiryDate - System.currentTimeMillis()
+fun calculateDaysLeft(expiryDate: Timestamp?): Long {
+    if (expiryDate == null) return 0
+    val diff = expiryDate.toDate().time - System.currentTimeMillis()
     return TimeUnit.MILLISECONDS.toDays(diff)
 }
 
@@ -57,9 +63,9 @@ fun HomeScreen(navController: NavController) {
 
     val db = FirebaseFirestore.getInstance()
     val userId = FirebaseAuth.getInstance().currentUser!!.uid
-    val userEmail = FirebaseAuth.getInstance().currentUser?.email ?: ""
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val sharingService = remember { SharingService(context) }
 
     val gradient = Brush.verticalGradient(
         colors = listOf(Color(0xFFF5F9FF), Color(0xFFE8F1FC))
@@ -67,78 +73,78 @@ fun HomeScreen(navController: NavController) {
 
     var myItems by remember { mutableStateOf(listOf<ExpiryItem>()) }
     var sharedItems by remember { mutableStateOf(listOf<ExpiryItem>()) }
+    var pendingInvites by remember { mutableIntStateOf(0) }
     var selectedTab by remember { mutableIntStateOf(0) } // 0: My Items, 1: Shared
 
     var isLoading by remember { mutableStateOf(true) }
-    var isRefreshing by remember { mutableStateOf(false) }
 
     val displayedItems = if (selectedTab == 0) myItems else sharedItems
 
+    var isRefreshing by remember { mutableStateOf(false) }
+
     fun loadItems() {
-        // Fetch current user's username
-        db.collection(AppConfig.USERS_COLLECTION)
-            .document(userId)
-            .get()
-            .addOnSuccessListener { userDoc ->
-                val currentUserUsername = userDoc.getString("username") ?: ""
-
-                // Fetch My Items
-                db.collection(AppConfig.USERS_COLLECTION)
-                    .document(userId)
-                    .collection(AppConfig.ITEMS_COLLECTION)
-                    .addSnapshotListener { result, _ ->
-                        result?.let {
-                            myItems = it.documents.mapNotNull { doc ->
-                                val archived = doc.getBoolean("archived") ?: false
-                                if (archived) return@mapNotNull null
-                                ExpiryItem(
-                                    id = doc.id,
-                                    name = doc.getString("name") ?: "",
-                                    purchasedDate = doc.getLong("purchasedDate") ?: 0L,
-                                    expiryDate = doc.getLong("expiryDate") ?: 0L,
-                                    notes = doc.getString("notes") ?: "",
-                                    username = doc.getString("username") ?: "",
-                                    email = doc.getString("email") ?: "",
-                                    password = doc.getString("password") ?: "",
-                                    amount = doc.getString("amount") ?: "",
-                                    ownerId = doc.getString("ownerId") ?: userId,
-                                    ownerUsername = doc.getString("ownerUsername") ?: "",
-                                    sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList(),
-                                    archived = false
-                                )
-                            }.sortedBy { calculateDaysLeft(it.expiryDate) }
-                            isLoading = false
-                            isRefreshing = false
-                        }
-                    }
-
-                // Fetch Shared Items (By username)
-                if (currentUserUsername.isNotEmpty()) {
-                    db.collectionGroup(AppConfig.ITEMS_COLLECTION)
-                        .whereArrayContains("sharedWith", currentUserUsername)
-                        .whereEqualTo("archived", false)
-                        .addSnapshotListener { result, _ ->
-                            result?.let {
-                                sharedItems = it.documents.map { doc ->
-                                    ExpiryItem(
-                                        id = doc.id,
-                                        name = doc.getString("name") ?: "",
-                                        purchasedDate = doc.getLong("purchasedDate") ?: 0L,
-                                        expiryDate = doc.getLong("expiryDate") ?: 0L,
-                                        notes = doc.getString("notes") ?: "",
-                                        username = doc.getString("username") ?: "",
-                                        email = doc.getString("email") ?: "",
-                                        password = doc.getString("password") ?: "",
-                                        amount = doc.getString("amount") ?: "",
-                                        ownerId = doc.getString("ownerId") ?: "",
-                                        ownerUsername = doc.getString("ownerUsername") ?: "",
-                                        sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList(),
-                                        archived = false
-                                    )
-                                }.sortedBy { calculateDaysLeft(it.expiryDate) }
-                            }
-                        }
+        // Fetch My Items
+        db.collection(SharingService.ITEMS_COLLECTION)
+            .whereEqualTo("ownerId", userId)
+            .whereEqualTo("archived", false)
+            .addSnapshotListener { result, error ->
+                if (error != null) {
+                    isLoading = false
+                    return@addSnapshotListener
                 }
+                result?.let {
+                    myItems = it.documents.mapNotNull { doc ->
+                        ExpiryItem(
+                            id = doc.id,
+                            itemName = doc.getString("itemName") ?: "",
+                            purchasedDate = doc.getTimestamp("purchasedDate"),
+                            expiryDate = doc.getTimestamp("expiryDate"),
+                            amount = doc.getDouble("amount"),
+                            notes = doc.getString("notes") ?: "",
+                            username = doc.getString("username") ?: "",
+                            email = doc.getString("email") ?: "",
+                            password = doc.getString("password") ?: "",
+                            ownerId = doc.getString("ownerId") ?: "",
+                            sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList(),
+                            archived = false,
+                            createdAt = doc.getTimestamp("createdAt") ?: Timestamp.now()
+                        )
+                    }.sortedBy { calculateDaysLeft(it.expiryDate) }
+                    isLoading = false
+                }
+            }
+
+        // Fetch Shared Items (by UID)
+        db.collection(SharingService.ITEMS_COLLECTION)
+            .whereArrayContains("sharedWith", userId)
+            .whereEqualTo("archived", false)
+            .addSnapshotListener { result, error ->
+                if (error != null) return@addSnapshotListener
+                result?.let {
+                    sharedItems = it.documents.map { doc ->
+                        ExpiryItem(
+                            id = doc.id,
+                            itemName = doc.getString("itemName") ?: "",
+                            purchasedDate = doc.getTimestamp("purchasedDate"),
+                            expiryDate = doc.getTimestamp("expiryDate"),
+                            amount = doc.getDouble("amount"),
+                            notes = doc.getString("notes") ?: "",
+                            username = doc.getString("username") ?: "",
+                            email = doc.getString("email") ?: "",
+                            password = doc.getString("password") ?: "",
+                            ownerId = doc.getString("ownerId") ?: "",
+                            sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList(),
+                            archived = false,
+                            createdAt = doc.getTimestamp("createdAt") ?: Timestamp.now()
+                        )
+                    }.sortedBy { calculateDaysLeft(it.expiryDate) }
+                }
+            }
+
+        // Count pending invitations
+        sharingService.getPendingInvitations()
+            .addSnapshotListener { result, _ ->
+                pendingInvites = result?.size() ?: 0
             }
     }
 
@@ -146,16 +152,16 @@ fun HomeScreen(navController: NavController) {
         loadItems()
     }
 
-    val onRefresh: () -> Unit = {
-        scope.launch {
-            isRefreshing = true
-            loadItems()
-            delay(800)
-            isRefreshing = false
-        }
-    }
-
-    Box(
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = {
+            scope.launch {
+                isRefreshing = true
+                loadItems()
+                delay(1200)
+                isRefreshing = false
+            }
+        },
         modifier = Modifier
             .fillMaxSize()
             .background(gradient)
@@ -189,26 +195,51 @@ fun HomeScreen(navController: NavController) {
                                 color = Color(0xFF0D47A1)
                             )
                             Text(
-                                text = if (selectedTab == 0) 
-                                    "${myItems.size} item${if (myItems.size != 1) "s" else ""} owned"
-                                else 
-                                    "${sharedItems.size} item${if (sharedItems.size != 1) "s" else ""} shared",
+                                text = when (selectedTab) {
+                                    0 -> "${myItems.size} item${if (myItems.size != 1) "s" else ""} owned"
+                                    1 -> "${sharedItems.size} item${if (sharedItems.size != 1) "s" else ""} shared"
+                                    else -> "$pendingInvites pending invitation${if (pendingInvites != 1) "s" else ""}"
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color(0xFF64B5F6)
                             )
                         }
-                        FilledTonalIconButton(
-                            onClick = onRefresh,
-                            shape = CircleShape,
-                            colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                containerColor = Color(0xFF1565C0).copy(alpha = 0.1f)
-                            )
-                        ) {
-                            Icon(
-                                Icons.Outlined.Refresh,
-                                contentDescription = "Refresh",
-                                tint = Color(0xFF1565C0)
-                            )
+
+                        // Invitations icon button (always visible)
+                        if (pendingInvites > 0) {
+                            BadgedBox(
+                                badge = {
+                                    Badge { Text("$pendingInvites") }
+                                }
+                            ) {
+                                FilledTonalIconButton(
+                                    onClick = { navController.navigate("invitations") },
+                                    shape = CircleShape,
+                                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                        containerColor = Color(0xFF4CAF50).copy(alpha = 0.1f)
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Notifications,
+                                        contentDescription = "Invitations",
+                                        tint = Color(0xFF4CAF50)
+                                    )
+                                }
+                            }
+                        } else {
+                            FilledTonalIconButton(
+                                onClick = { navController.navigate("invitations") },
+                                shape = CircleShape,
+                                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor = Color(0xFF1565C0).copy(alpha = 0.1f)
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Outlined.MailOutline,
+                                    contentDescription = "Invitations",
+                                    tint = Color(0xFF1565C0)
+                                )
+                            }
                         }
                     }
 
@@ -279,9 +310,9 @@ fun HomeScreen(navController: NavController) {
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = if (selectedTab == 0) 
-                                "Tap + to add your first expiry item"
-                            else 
+                            text = if (selectedTab == 0)
+                                "Pull down to refresh or tap + to add"
+                            else
                                 "Items shared with you will appear here",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color(0xFFB0BEC5)
@@ -294,20 +325,17 @@ fun HomeScreen(navController: NavController) {
             items(displayedItems, key = { it.id }) { item ->
                 val isExpired = calculateDaysLeft(item.expiryDate) <= 0
 
-                // Only allow swipe to archive for owned items
+                // Only allow swipe to archive for owned items (tab 0)
                 if (isExpired && selectedTab == 0) {
                     val dismissState = rememberSwipeToDismissBoxState(
                         confirmValueChange = { dismissValue ->
                             if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
-                                // Archive the expired item
-                                db.collection(AppConfig.USERS_COLLECTION)
-                                    .document(userId)
-                                    .collection(AppConfig.ITEMS_COLLECTION)
+                                db.collection(SharingService.ITEMS_COLLECTION)
                                     .document(item.id)
                                     .update("archived", true)
                                 Toast.makeText(
                                     context,
-                                    "${item.name} moved to Expired Items",
+                                    "${item.itemName} moved to Expired Items",
                                     Toast.LENGTH_SHORT
                                 ).show()
                                 true
@@ -361,16 +389,6 @@ fun HomeScreen(navController: NavController) {
             }
         }
 
-        // Refresh indicator
-        if (isRefreshing) {
-            LinearProgressIndicator(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter),
-                color = Color(0xFF1565C0),
-                trackColor = Color(0xFF1565C0).copy(alpha = 0.1f)
-            )
-        }
     }
 }
 
@@ -425,8 +443,12 @@ private fun ItemCard(item: ExpiryItem, onClick: () -> Unit, isExpired: Boolean =
         else -> Color(0xFF66BB6A)
     }
 
-    val totalDuration = item.expiryDate - item.purchasedDate
-    val remaining = item.expiryDate - System.currentTimeMillis()
+    val totalDuration = if (item.expiryDate != null && item.purchasedDate != null) {
+        item.expiryDate.toDate().time - item.purchasedDate.toDate().time
+    } else 0L
+    val remaining = if (item.expiryDate != null) {
+        item.expiryDate.toDate().time - System.currentTimeMillis()
+    } else 0L
     val progress = if (totalDuration > 0) {
         (remaining.toFloat() / totalDuration.toFloat()).coerceIn(0f, 1f)
     } else 0f
@@ -458,7 +480,7 @@ private fun ItemCard(item: ExpiryItem, onClick: () -> Unit, isExpired: Boolean =
                 // Left: Name + dates
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = item.name,
+                        text = item.itemName,
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.SemiBold,
                             letterSpacing = (-0.3).sp

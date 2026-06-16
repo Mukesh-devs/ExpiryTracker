@@ -13,6 +13,6 @@ object AppConfig {
     val ITEMS_COLLECTION: String = BuildConfig.FIRESTORE_ITEMS_COLLECTION
 
     // Encryption secret key
-    val ENCRYPTION_SECRET_KEY: String = BuildConfig.ENCRYPTION_SECRET_KEY
+    const val ENCRYPTION_SECRET_KEY: String = BuildConfig.ENCRYPTION_SECRET_KEY
 }
 

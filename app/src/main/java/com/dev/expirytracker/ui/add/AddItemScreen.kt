@@ -31,8 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.navigation.NavController
-import com.dev.expirytracker.config.AppConfig
-import com.dev.expirytracker.util.CryptoManager
+import com.dev.expirytracker.service.SharingService
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import java.text.SimpleDateFormat
@@ -42,47 +42,19 @@ import java.util.*
 @Composable
 fun AddItemScreen(navController: NavController) {
 
-    var name by remember { mutableStateOf("") }
+    var itemName by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
-    var purchasedDate by remember { mutableStateOf<Long?>(null) }
-    var expiryDate by remember { mutableStateOf<Long?>(null) }
+    var purchasedDate by remember { mutableStateOf<Timestamp?>(null) }
+    var expiryDate by remember { mutableStateOf<Timestamp?>(null) }
     var username by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
     var shareEmail by remember { mutableStateOf("") }
-    var usernameSuggestions by remember { mutableStateOf(listOf<String>()) }
-    var showSuggestions by remember { mutableStateOf(false) }
 
     val db = FirebaseFirestore.getInstance()
     val userId = FirebaseAuth.getInstance().currentUser!!.uid
-    var currentUserUsername by remember { mutableStateOf("") }
-
-    LaunchedEffect(userId) {
-        db.collection(AppConfig.USERS_COLLECTION)
-            .document(userId)
-            .get()
-            .addOnSuccessListener {
-                currentUserUsername = it.getString("username") ?: ""
-            }
-    }
-
-    LaunchedEffect(shareEmail) {
-        if (shareEmail.length >= 2) {
-            db.collection(AppConfig.USERS_COLLECTION)
-                .whereGreaterThanOrEqualTo("username", shareEmail)
-                .whereLessThanOrEqualTo("username", shareEmail + "\uf8ff")
-                .limit(5)
-                .get()
-                .addOnSuccessListener { documents ->
-                    usernameSuggestions = documents.mapNotNull { it.getString("username") }
-                        .filter { it != currentUserUsername }
-                    showSuggestions = usernameSuggestions.isNotEmpty()
-                }
-        } else {
-            showSuggestions = false
-        }
-    }
+    val userEmail = FirebaseAuth.getInstance().currentUser?.email ?: ""
 
     var showUsername by remember { mutableStateOf(false) }
     var showEmail by remember { mutableStateOf(false) }
@@ -149,8 +121,8 @@ fun AddItemScreen(navController: NavController) {
                     Spacer(modifier = Modifier.height(12.dp))
 
                     OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
+                        value = itemName,
+                        onValueChange = { itemName = it },
                         label = { Text("Item Name") },
                         leadingIcon = {
                             Icon(
@@ -178,14 +150,14 @@ fun AddItemScreen(navController: NavController) {
                     ) {
                         DateChip(
                             label = "Purchased",
-                            date = purchasedDate?.let { formatter.format(Date(it)) },
+                            date = purchasedDate?.let { formatter.format(it.toDate()) },
                             accentColor = accentColor,
                             onClick = { showPurchasePicker = true },
                             modifier = Modifier.weight(1f)
                         )
                         DateChip(
                             label = "Expires",
-                            date = expiryDate?.let { formatter.format(Date(it)) },
+                            date = expiryDate?.let { formatter.format(it.toDate()) },
                             accentColor = Color(0xFFE53935),
                             onClick = { showExpiryPicker = true },
                             modifier = Modifier.weight(1f)
@@ -214,6 +186,30 @@ fun AddItemScreen(navController: NavController) {
                         ),
                         minLines = 2,
                         maxLines = 4
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Amount field in main section
+                    OutlinedTextField(
+                        value = amount,
+                        onValueChange = { amount = it },
+                        label = { Text("Amount (Optional)") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.CurrencyRupee,
+                                contentDescription = null,
+                                tint = accentColor
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = accentColor,
+                            focusedLabelColor = accentColor,
+                            cursorColor = accentColor
+                        ),
+                        singleLine = true
                     )
                 }
             }
@@ -296,26 +292,6 @@ fun AddItemScreen(navController: NavController) {
                                             }
                                         )
                                     }
-                                    if (!showAmount) {
-                                        CredentialDropdownItem(
-                                            icon = Icons.Outlined.CurrencyRupee,
-                                            label = "Amount",
-                                            onClick = {
-                                                showAmount = true
-                                                showDropdown = false
-                                            }
-                                        )
-                                    }
-                                    if (!showShareEmail) {
-                                        CredentialDropdownItem(
-                                            icon = Icons.Outlined.Share,
-                                            label = "Share with (Username)",
-                                            onClick = {
-                                                showShareEmail = true
-                                                showDropdown = false
-                                            }
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -392,82 +368,6 @@ fun AddItemScreen(navController: NavController) {
                             password = ""
                         }
                     )
-
-                    CredentialField(
-                        visible = showAmount,
-                        value = amount,
-                        onValueChange = { amount = it },
-                        label = "Amount",
-                        icon = Icons.Outlined.CurrencyRupee,
-                        accentColor = accentColor,
-                        onRemove = {
-                            showAmount = false
-                            amount = ""
-                        }
-                    )
-
-                    // ── Share with Username Field with Suggestions ──
-                    AnimatedVisibility(
-                        visible = showShareEmail,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
-                    ) {
-                        Column {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Box {
-                                OutlinedTextField(
-                                    value = shareEmail,
-                                    onValueChange = { shareEmail = it.lowercase() },
-                                    label = { Text("Share with Username") },
-                                    leadingIcon = {
-                                        Icon(Icons.Outlined.Share, null, tint = accentColor)
-                                    },
-                                    trailingIcon = {
-                                        IconButton(onClick = {
-                                            showShareEmail = false
-                                            shareEmail = ""
-                                        }) {
-                                            Icon(Icons.Default.Close, null, tint = Color(0xFFE57373))
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(16.dp),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = accentColor,
-                                        focusedLabelColor = accentColor,
-                                        cursorColor = accentColor
-                                    ),
-                                    singleLine = true
-                                )
-
-                                if (showSuggestions) {
-                                    Card(
-                                        modifier = Modifier
-                                            .padding(top = 64.dp)
-                                            .fillMaxWidth()
-                                            .zIndex(1f),
-                                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                                        colors = CardDefaults.cardColors(containerColor = Color.White)
-                                    ) {
-                                        Column {
-                                            usernameSuggestions.forEach { suggestion ->
-                                                Text(
-                                                    text = suggestion,
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clickable {
-                                                            shareEmail = suggestion
-                                                            showSuggestions = false
-                                                        }
-                                                        .padding(16.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
 
@@ -492,29 +392,27 @@ fun AddItemScreen(navController: NavController) {
         ) {
             Button(
                 onClick = {
-                    if (!isSaving && name.isNotBlank()
+                    if (!isSaving && itemName.isNotBlank()
                         && purchasedDate != null && expiryDate != null
                     ) {
                         isSaving = true
 
-                        val item = hashMapOf(
-                            "name" to name,
-                            "purchasedDate" to purchasedDate,
-                            "expiryDate" to expiryDate,
+                        val item = mutableMapOf<String, Any>(
+                            "itemName" to itemName,
+                            "purchasedDate" to purchasedDate!!,
+                            "expiryDate" to expiryDate!!,
                             "notes" to notes,
-                            "username" to username, // CryptoManager.encrypt(username),
-                            "email" to email,       // CryptoManager.encrypt(email),
-                            "password" to password, // CryptoManager.encrypt(password),
-                            "amount" to amount,
+                            "username" to username,
+                            "email" to email,
+                            "password" to password,
                             "ownerId" to userId,
-                            "ownerUsername" to currentUserUsername,
-                            "sharedWith" to if (shareEmail.isNotBlank()) listOf(shareEmail) else emptyList<String>(),
-                            "archived" to false
+                            "sharedWith" to emptyList<String>(),
+                            "archived" to false,
+                            "createdAt" to Timestamp.now()
                         )
+                        amount.toDoubleOrNull()?.let { item["amount"] = it }
 
-                        db.collection(AppConfig.USERS_COLLECTION)
-                            .document(userId)
-                            .collection(AppConfig.ITEMS_COLLECTION)
+                        db.collection(SharingService.ITEMS_COLLECTION)
                             .add(item)
                             .addOnSuccessListener {
                                 isSaving = false
@@ -534,7 +432,7 @@ fun AddItemScreen(navController: NavController) {
                     defaultElevation = 6.dp,
                     pressedElevation = 2.dp
                 ),
-                enabled = name.isNotBlank() && purchasedDate != null && expiryDate != null && !isSaving
+                enabled = itemName.isNotBlank() && purchasedDate != null && expiryDate != null && !isSaving
             ) {
                 if (isSaving) {
                     CircularProgressIndicator(
@@ -561,7 +459,9 @@ fun AddItemScreen(navController: NavController) {
             onDismissRequest = { showPurchasePicker = false },
             confirmButton = {
                 TextButton(onClick = {
-                    purchasedDate = datePickerState.selectedDateMillis
+                    datePickerState.selectedDateMillis?.let {
+                        purchasedDate = Timestamp(Date(it))
+                    }
                     showPurchasePicker = false
                 }) { Text("OK") }
             },
@@ -577,7 +477,9 @@ fun AddItemScreen(navController: NavController) {
             onDismissRequest = { showExpiryPicker = false },
             confirmButton = {
                 TextButton(onClick = {
-                    expiryDate = datePickerState.selectedDateMillis
+                    datePickerState.selectedDateMillis?.let {
+                        expiryDate = Timestamp(Date(it))
+                    }
                     showExpiryPicker = false
                 }) { Text("OK") }
             },

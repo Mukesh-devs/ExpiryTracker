@@ -27,13 +27,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.navigation.NavController
-import com.dev.expirytracker.config.AppConfig
 import com.dev.expirytracker.model.ExpiryItem
+import com.dev.expirytracker.service.SharingService
 import com.dev.expirytracker.ui.home.calculateDaysLeft
-import com.dev.expirytracker.util.CryptoManager
+import com.dev.expirytracker.ui.home.formatDate
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -52,6 +53,8 @@ fun DetailScreen(
     val db = FirebaseFirestore.getInstance()
     val userId = FirebaseAuth.getInstance().currentUser!!.uid
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val sharingService = remember { SharingService(context) }
     val formatter = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
 
     var item by remember { mutableStateOf<ExpiryItem?>(null) }
@@ -60,17 +63,15 @@ fun DetailScreen(
     var passwordVisible by remember { mutableStateOf(false) }
 
     var showShareDialog by remember { mutableStateOf(false) }
-    var shareUsername by remember { mutableStateOf("") }
-    var usernameSuggestions by remember { mutableStateOf(listOf<String>()) }
-    var showSuggestions by remember { mutableStateOf(false) }
-    var currentUserUsername by remember { mutableStateOf("") }
+    var shareEmail by remember { mutableStateOf("") }
+    var isSharing by remember { mutableStateOf(false) }
 
     // ── Edit Mode State ──
     var isEditing by remember { mutableStateOf(false) }
     var editName by remember { mutableStateOf("") }
     var editNotes by remember { mutableStateOf("") }
-    var editPurchasedDate by remember { mutableStateOf<Long?>(null) }
-    var editExpiryDate by remember { mutableStateOf<Long?>(null) }
+    var editPurchasedDate by remember { mutableStateOf<Timestamp?>(null) }
+    var editExpiryDate by remember { mutableStateOf<Timestamp?>(null) }
     var editUsername by remember { mutableStateOf("") }
     var editEmail by remember { mutableStateOf("") }
     var editPassword by remember { mutableStateOf("") }
@@ -79,71 +80,41 @@ fun DetailScreen(
     var showExpiryPicker by remember { mutableStateOf(false) }
 
     fun enterEditMode(data: ExpiryItem) {
-        editName = data.name
+        editName = data.itemName
         editNotes = data.notes
         editPurchasedDate = data.purchasedDate
         editExpiryDate = data.expiryDate
-        editUsername = data.username // if (data.username.isNotBlank()) CryptoManager.decrypt(data.username) else ""
-        editEmail = data.email       // if (data.email.isNotBlank()) CryptoManager.decrypt(data.email) else ""
-        editPassword = data.password // if (data.password.isNotBlank()) CryptoManager.decrypt(data.password) else ""
-        editAmount = data.amount
+        editUsername = data.username
+        editEmail = data.email
+        editPassword = data.password
+        editAmount = data.amount?.toString() ?: ""
         isEditing = true
     }
 
-    LaunchedEffect(userId) {
-        db.collection(AppConfig.USERS_COLLECTION)
-            .document(userId)
-            .get()
-            .addOnSuccessListener {
-                currentUserUsername = it.getString("username") ?: ""
-            }
-    }
-
-    LaunchedEffect(shareUsername) {
-        if (shareUsername.length >= 2) {
-            db.collection(AppConfig.USERS_COLLECTION)
-                .whereGreaterThanOrEqualTo("username", shareUsername)
-                .whereLessThanOrEqualTo("username", shareUsername + "\uf8ff")
-                .limit(5)
-                .get()
-                .addOnSuccessListener { documents ->
-                    usernameSuggestions = documents.mapNotNull { it.getString("username") }
-                        .filter { it != currentUserUsername && !(item?.sharedWith?.contains(it) ?: false) }
-                    showSuggestions = usernameSuggestions.isNotEmpty()
-                }
-        } else {
-            showSuggestions = false
-        }
-    }
-
     LaunchedEffect(Unit) {
-        db.collection(AppConfig.USERS_COLLECTION)
-            .document(ownerId)
-            .collection(AppConfig.ITEMS_COLLECTION)
+        db.collection(SharingService.ITEMS_COLLECTION)
             .document(itemId)
-            .get()
-            .addOnSuccessListener { doc ->
-                if (doc.exists()) {
-                    item = ExpiryItem(
-                        id = doc.id,
-                        name = doc.getString("name") ?: "",
-                        purchasedDate = doc.getLong("purchasedDate") ?: 0L,
-                        expiryDate = doc.getLong("expiryDate") ?: 0L,
-                        notes = doc.getString("notes") ?: "",
-                        username = doc.getString("username") ?: "",
-                        email = doc.getString("email") ?: "",
-                        password = doc.getString("password") ?: "",
-                        amount = doc.getString("amount") ?: "",
-                        ownerId = doc.getString("ownerId") ?: "",
-                        ownerUsername = doc.getString("ownerUsername") ?: "",
-                        sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList()
-                    )
+            .addSnapshotListener { doc, error ->
+                if (error != null || doc == null || !doc.exists()) {
+                    isLoading = false
+                    return@addSnapshotListener
                 }
+                item = ExpiryItem(
+                    id = doc.id,
+                    itemName = doc.getString("itemName") ?: "",
+                    purchasedDate = doc.getTimestamp("purchasedDate"),
+                    expiryDate = doc.getTimestamp("expiryDate"),
+                    amount = doc.getDouble("amount"),
+                    notes = doc.getString("notes") ?: "",
+                    username = doc.getString("username") ?: "",
+                    email = doc.getString("email") ?: "",
+                    password = doc.getString("password") ?: "",
+                    ownerId = doc.getString("ownerId") ?: "",
+                    sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList(),
+                    archived = doc.getBoolean("archived") ?: false,
+                    createdAt = doc.getTimestamp("createdAt") ?: Timestamp.now()
+                )
                 isLoading = false
-            }
-            .addOnFailureListener {
-                isLoading = false
-                Toast.makeText(context, "Error: ${it.message}", Toast.LENGTH_LONG).show()
             }
     }
 
@@ -231,14 +202,14 @@ fun DetailScreen(
                             ) {
                                 EditDateChip(
                                     label = "Purchased",
-                                    date = editPurchasedDate?.let { formatter.format(Date(it)) },
+                                    date = editPurchasedDate?.let { formatter.format(it.toDate()) },
                                     accentColor = accentColor,
                                     onClick = { showPurchasePicker = true },
                                     modifier = Modifier.weight(1f)
                                 )
                                 EditDateChip(
                                     label = "Expires",
-                                    date = editExpiryDate?.let { formatter.format(Date(it)) },
+                                    date = editExpiryDate?.let { formatter.format(it.toDate()) },
                                     accentColor = Color(0xFFE53935),
                                     onClick = { showExpiryPicker = true },
                                     modifier = Modifier.weight(1f)
@@ -393,41 +364,24 @@ fun DetailScreen(
                             if (editName.isNotBlank() &&
                                 editPurchasedDate != null && editExpiryDate != null
                             ) {
-                                // Update local state immediately
-                                item = ExpiryItem(
-                                    id = itemId,
-                                    name = editName,
-                                    purchasedDate = editPurchasedDate!!,
-                                    expiryDate = editExpiryDate!!,
-                                    notes = editNotes,
-                                    username = editUsername, // CryptoManager.encrypt(editUsername),
-                                    email = editEmail,       // CryptoManager.encrypt(editEmail),
-                                    password = editPassword, // CryptoManager.encrypt(editPassword),
-                                    amount = editAmount,
-                                    ownerId = item?.ownerId ?: userId,
-                                    ownerUsername = item?.ownerUsername ?: "",
-                                    sharedWith = item?.sharedWith ?: emptyList()
-                                )
-                                isEditing = false
-                                Toast.makeText(context, "Item updated", Toast.LENGTH_SHORT).show()
-
-                                // Firestore update in background
-                                val updated = hashMapOf<String, Any>(
-                                    "name" to editName,
+                                val updated = mutableMapOf<String, Any>(
+                                    "itemName" to editName,
                                     "purchasedDate" to editPurchasedDate!!,
                                     "expiryDate" to editExpiryDate!!,
                                     "notes" to editNotes,
-                                    "username" to editUsername, // CryptoManager.encrypt(editUsername),
-                                    "email" to editEmail,       // CryptoManager.encrypt(editEmail),
-                                    "password" to editPassword, // CryptoManager.encrypt(editPassword),
-                                    "amount" to editAmount
+                                    "username" to editUsername,
+                                    "email" to editEmail,
+                                    "password" to editPassword
                                 )
+                                editAmount.toDoubleOrNull()?.let { updated["amount"] = it }
 
-                                db.collection(AppConfig.USERS_COLLECTION)
-                                    .document(item?.ownerId ?: userId)
-                                    .collection(AppConfig.ITEMS_COLLECTION)
+                                db.collection(SharingService.ITEMS_COLLECTION)
                                     .document(itemId)
                                     .update(updated)
+                                    .addOnSuccessListener {
+                                        isEditing = false
+                                        Toast.makeText(context, "Item updated", Toast.LENGTH_SHORT).show()
+                                    }
                             }
                         },
                         modifier = Modifier
@@ -452,7 +406,7 @@ fun DetailScreen(
 
             } else {
                 // ════════════════════════════════════
-                // ══       VIEW MODE (existing)    ══
+                // ══       VIEW MODE               ══
                 // ════════════════════════════════════
 
                 val daysLeft = calculateDaysLeft(data.expiryDate)
@@ -464,11 +418,17 @@ fun DetailScreen(
                     else -> Color(0xFF66BB6A)
                 }
 
-                val totalDuration = data.expiryDate - data.purchasedDate
-                val remaining = data.expiryDate - System.currentTimeMillis()
+                val totalDuration = if (data.expiryDate != null && data.purchasedDate != null) {
+                    data.expiryDate.toDate().time - data.purchasedDate.toDate().time
+                } else 0L
+                val remaining = if (data.expiryDate != null) {
+                    data.expiryDate.toDate().time - System.currentTimeMillis()
+                } else 0L
                 val progress = if (totalDuration > 0) {
                     (remaining.toFloat() / totalDuration.toFloat()).coerceIn(0f, 1f)
                 } else 0f
+
+                val isOwner = data.ownerId == userId
 
                 Column(
                     modifier = Modifier
@@ -480,19 +440,17 @@ fun DetailScreen(
 
                     // ── Header ──
                     Text(
-                        text = data.name,
+                        text = data.itemName,
                         style = MaterialTheme.typography.headlineMedium.copy(
                             fontWeight = FontWeight.Bold,
                             letterSpacing = (-0.5).sp
                         ),
                         color = Color(0xFF0D47A1)
                     )
-                    
-                    val isOwner = data.ownerId == userId || data.ownerId.isEmpty()
-                    
+
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = if (isOwner) "My Item" else "Shared by ${data.ownerUsername}",
+                            text = if (isOwner) "My Item" else "Shared Item",
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (isOwner) Color(0xFF64B5F6) else Color(0xFF4CAF50)
                         )
@@ -618,7 +576,7 @@ fun DetailScreen(
 
                     // ── Credentials Card ──
                     val hasCredentials = data.username.isNotBlank() || data.email.isNotBlank() ||
-                            data.password.isNotBlank() || data.amount.isNotBlank()
+                            data.password.isNotBlank()
 
                     if (hasCredentials) {
                         Spacer(modifier = Modifier.height(12.dp))
@@ -636,7 +594,7 @@ fun DetailScreen(
                                     DetailInfoRow(
                                         icon = Icons.Outlined.Person,
                                         label = "Username",
-                                        value = data.username, // CryptoManager.decrypt(data.username),
+                                        value = data.username,
                                         accentColor = accentColor
                                     )
                                 }
@@ -645,7 +603,7 @@ fun DetailScreen(
                                     DetailInfoRow(
                                         icon = Icons.Outlined.Email,
                                         label = "Email",
-                                        value = data.email, // CryptoManager.decrypt(data.email),
+                                        value = data.email,
                                         accentColor = accentColor
                                     )
                                 }
@@ -680,7 +638,7 @@ fun DetailScreen(
                                             )
                                             Text(
                                                 text = if (passwordVisible)
-                                                    data.password // CryptoManager.decrypt(data.password)
+                                                    data.password
                                                 else "••••••••",
                                                 style = MaterialTheme.typography.bodyMedium.copy(
                                                     fontWeight = FontWeight.Medium
@@ -703,15 +661,28 @@ fun DetailScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
 
-                                if (data.amount.isNotBlank()) {
-                                    DetailInfoRow(
-                                        icon = Icons.Outlined.CurrencyRupee,
-                                        label = "Amount",
-                                        value = data.amount,
-                                        accentColor = accentColor
-                                    )
-                                }
+                    // ── Amount Card ──
+                    if (data.amount != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(20.dp)) {
+                                SectionLabel("AMOUNT")
+                                Spacer(modifier = Modifier.height(10.dp))
+                                DetailInfoRow(
+                                    icon = Icons.Outlined.CurrencyRupee,
+                                    label = "Amount",
+                                    value = "₹${data.amount}",
+                                    accentColor = accentColor
+                                )
                             }
                         }
                     }
@@ -728,8 +699,19 @@ fun DetailScreen(
                             Column(modifier = Modifier.padding(20.dp)) {
                                 SectionLabel("SHARED WITH")
                                 Spacer(modifier = Modifier.height(10.dp))
-                                
-                                data.sharedWith.forEach { sharedUser ->
+
+                                data.sharedWith.forEach { sharedUserId ->
+                                    var userEmail by remember { mutableStateOf("Loading...") }
+
+                                    LaunchedEffect(sharedUserId) {
+                                        db.collection(SharingService.USERS_COLLECTION)
+                                            .document(sharedUserId)
+                                            .get()
+                                            .addOnSuccessListener { doc ->
+                                                userEmail = doc.getString("email") ?: sharedUserId
+                                            }
+                                    }
+
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -740,18 +722,17 @@ fun DetailScreen(
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Icon(Icons.Outlined.Person, null, tint = Color.Gray, modifier = Modifier.size(18.dp))
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Text(text = sharedUser, style = MaterialTheme.typography.bodyMedium)
+                                            Text(text = userEmail, style = MaterialTheme.typography.bodyMedium)
                                         }
                                         IconButton(onClick = {
-                                            db.collection(AppConfig.USERS_COLLECTION)
-                                                .document(userId)
-                                                .collection(AppConfig.ITEMS_COLLECTION)
-                                                .document(itemId)
-                                                .update("sharedWith", FieldValue.arrayRemove(sharedUser))
-                                                .addOnSuccessListener {
-                                                    Toast.makeText(context, "Removed $sharedUser", Toast.LENGTH_SHORT).show()
-                                                    item = item?.copy(sharedWith = data.sharedWith.filter { it != sharedUser })
+                                            scope.launch {
+                                                val result = sharingService.revokeAccess(itemId, sharedUserId)
+                                                result.onSuccess {
+                                                    Toast.makeText(context, "Access revoked", Toast.LENGTH_SHORT).show()
+                                                }.onFailure {
+                                                    Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show()
                                                 }
+                                            }
                                         }) {
                                             Icon(Icons.Default.Close, null, tint = Color(0xFFE53935), modifier = Modifier.size(18.dp))
                                         }
@@ -764,15 +745,14 @@ fun DetailScreen(
                     Spacer(modifier = Modifier.height(80.dp))
                 }
 
-                // ── FABs: Share + Edit + Delete ──
+                // ── FABs: Share + Edit + Delete (Owner only) ──
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(end = 20.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    val isOwnerFab = data.ownerId == userId || data.ownerId.isEmpty()
-                    if (isOwnerFab) {
+                    if (isOwner) {
                         // Share FAB
                         FloatingActionButton(
                             onClick = { showShareDialog = true },
@@ -839,9 +819,7 @@ fun DetailScreen(
                     Button(
                         onClick = {
                             showDialog = false
-                            db.collection(AppConfig.USERS_COLLECTION)
-                                .document(userId)
-                                .collection(AppConfig.ITEMS_COLLECTION)
+                            db.collection(SharingService.ITEMS_COLLECTION)
                                 .document(itemId)
                                 .delete()
                             navController.popBackStack()
@@ -881,76 +859,54 @@ fun DetailScreen(
                 text = {
                     Column {
                         Text(
-                            "Enter the username of the person you want to share this item with.",
+                            "Enter the email of the person you want to share this item with.",
                             color = Color(0xFF546E7A),
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        Box {
-                            OutlinedTextField(
-                                value = shareUsername,
-                                onValueChange = { shareUsername = it.lowercase() },
-                                label = { Text("Recipient Username") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(16.dp)
-                            )
-                            
-                            if (showSuggestions) {
-                                Card(
-                                    modifier = Modifier
-                                        .padding(top = 64.dp)
-                                        .fillMaxWidth()
-                                        .zIndex(1f),
-                                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color.White)
-                                ) {
-                                    Column {
-                                        usernameSuggestions.forEach { suggestion ->
-                                            Text(
-                                                text = suggestion,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clickable {
-                                                        shareUsername = suggestion
-                                                        showSuggestions = false
-                                                    }
-                                                    .padding(16.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        OutlinedTextField(
+                            value = shareEmail,
+                            onValueChange = { shareEmail = it },
+                            label = { Text("Recipient Email") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp)
+                        )
                     }
                 },
                 confirmButton = {
                     Button(
                         onClick = {
-                            if (shareUsername.isNotBlank()) {
-                                db.collection(AppConfig.USERS_COLLECTION)
-                                    .document(item?.ownerId?.ifBlank { userId } ?: userId)
-                                    .collection(AppConfig.ITEMS_COLLECTION)
-                                    .document(itemId)
-                                    .update("sharedWith", FieldValue.arrayUnion(shareUsername))
-                                    .addOnSuccessListener {
-                                        Toast.makeText(context, "Item shared with $shareUsername", Toast.LENGTH_SHORT).show()
+                            if (shareEmail.isNotBlank()) {
+                                isSharing = true
+                                scope.launch {
+                                    val result = sharingService.shareItem(itemId, shareEmail)
+                                    isSharing = false
+                                    result.onSuccess {
+                                        Toast.makeText(context, "Invitation sent!", Toast.LENGTH_SHORT).show()
                                         showShareDialog = false
-                                        shareUsername = ""
-                                        // Update local state
-                                        item = item?.copy(sharedWith = (item?.sharedWith ?: emptyList()) + shareUsername)
+                                        shareEmail = ""
+                                    }.onFailure {
+                                        Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show()
                                     }
-                                    .addOnFailureListener {
-                                        Toast.makeText(context, "Failed to share: ${it.message}", Toast.LENGTH_SHORT).show()
-                                    }
+                                }
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color(0xFF4CAF50)
                         ),
-                        shape = RoundedCornerShape(14.dp)
+                        shape = RoundedCornerShape(14.dp),
+                        enabled = !isSharing
                     ) {
-                        Text("Share")
+                        if (isSharing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Text("Send Invite")
+                        }
                     }
                 },
                 dismissButton = {
@@ -968,13 +924,15 @@ fun DetailScreen(
     // ── Date Pickers for Edit Mode ──
     if (showPurchasePicker) {
         val datePickerState = rememberDatePickerState(
-            initialSelectedDateMillis = editPurchasedDate
+            initialSelectedDateMillis = editPurchasedDate?.toDate()?.time
         )
         DatePickerDialog(
             onDismissRequest = { showPurchasePicker = false },
             confirmButton = {
                 TextButton(onClick = {
-                    editPurchasedDate = datePickerState.selectedDateMillis
+                    datePickerState.selectedDateMillis?.let {
+                        editPurchasedDate = Timestamp(Date(it))
+                    }
                     showPurchasePicker = false
                 }) { Text("OK") }
             },
@@ -986,13 +944,15 @@ fun DetailScreen(
 
     if (showExpiryPicker) {
         val datePickerState = rememberDatePickerState(
-            initialSelectedDateMillis = editExpiryDate
+            initialSelectedDateMillis = editExpiryDate?.toDate()?.time
         )
         DatePickerDialog(
             onDismissRequest = { showExpiryPicker = false },
             confirmButton = {
                 TextButton(onClick = {
-                    editExpiryDate = datePickerState.selectedDateMillis
+                    datePickerState.selectedDateMillis?.let {
+                        editExpiryDate = Timestamp(Date(it))
+                    }
                     showExpiryPicker = false
                 }) { Text("OK") }
             },
@@ -1157,9 +1117,4 @@ private fun DetailInfoRow(
             )
         }
     }
-}
-
-private fun formatDate(timestamp: Long): String {
-    val sdf = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
-    return sdf.format(Date(timestamp))
 }

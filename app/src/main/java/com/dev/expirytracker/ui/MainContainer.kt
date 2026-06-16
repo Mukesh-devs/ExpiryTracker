@@ -24,6 +24,7 @@ import com.dev.expirytracker.ui.add.AddItemScreen
 import com.dev.expirytracker.ui.detail.DetailScreen
 import com.dev.expirytracker.ui.expired.ExpiredItemsScreen
 import com.dev.expirytracker.ui.home.HomeScreen
+import com.dev.expirytracker.ui.invitations.InvitationsScreen
 import com.dev.expirytracker.ui.login.LoginScreen
 import com.dev.expirytracker.ui.login.RegisterScreen
 import com.dev.expirytracker.ui.profile.ProfileScreen
@@ -41,6 +42,7 @@ private val drawerItems = listOf(
     DrawerItem("home", "Home", Icons.Outlined.Home, Icons.Outlined.Home),
     DrawerItem("expired", "Expired Items", Icons.Outlined.DeleteSweep, Icons.Outlined.DeleteSweep),
     DrawerItem("add", "Add Item", Icons.Outlined.AddCircleOutline, Icons.Outlined.AddCircleOutline),
+    DrawerItem("invitations", "Invitations", Icons.Outlined.MailOutline, Icons.Outlined.MailOutline),
     DrawerItem("profile", "Profile", Icons.Outlined.Person, Icons.Outlined.Person),
     DrawerItem("about", "About", Icons.Outlined.Info, Icons.Outlined.Info)
 )
@@ -259,6 +261,7 @@ fun MainContainer() {
                     composable("home") { HomeScreen(navController) }
                     composable("expired") { ExpiredItemsScreen(navController) }
                     composable("add") { AddItemScreen(navController) }
+                    composable("invitations") { InvitationsScreen(navController) }
                     composable("profile") { ProfileScreen(navController) }
                     composable("about") { AboutScreen() }
                     composable("detail/{itemId}/{ownerId}") { backStackEntry ->
@@ -287,6 +290,7 @@ fun MainContainer() {
             composable("home") { HomeScreen(navController) }
             composable("expired") { ExpiredItemsScreen(navController) }
             composable("add") { AddItemScreen(navController) }
+            composable("invitations") { InvitationsScreen(navController) }
             composable("profile") { ProfileScreen(navController) }
             composable("about") { AboutScreen() }
 

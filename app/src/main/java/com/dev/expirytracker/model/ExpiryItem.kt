@@ -1,17 +1,22 @@
 package com.dev.expirytracker.model
 
+import com.google.firebase.Timestamp
+
 data class ExpiryItem(
     val id: String = "",
-    val name: String = "",
-    val purchasedDate: Long = 0L,
-    val expiryDate: Long = 0L,
+    val itemName: String = "",
+    val purchasedDate: Timestamp? = null,
+    val expiryDate: Timestamp? = null,
+    val amount: Double? = null,
     val notes: String = "",
-    val username: String = "", // This is for encrypted credentials username
-    val email: String = "",    // This is for encrypted credentials email
+
+    // Plain text credentials
+    val username: String = "",
+    val email: String = "",
     val password: String = "",
-    val amount: String = "",
-    val archived: Boolean = false,
+
     val ownerId: String = "",
-    val ownerUsername: String = "", // Added: Username of the owner
-    val sharedWith: List<String> = emptyList() // Now stores usernames
+    val sharedWith: List<String> = emptyList(),
+    val archived: Boolean = false,
+    val createdAt: Timestamp = Timestamp.now()
 )

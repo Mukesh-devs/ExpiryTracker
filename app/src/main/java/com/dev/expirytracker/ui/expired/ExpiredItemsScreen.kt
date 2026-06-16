@@ -23,10 +23,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import com.dev.expirytracker.config.AppConfig
 import com.dev.expirytracker.model.ExpiryItem
+import com.dev.expirytracker.service.SharingService
 import com.dev.expirytracker.ui.home.calculateDaysLeft
 import com.dev.expirytracker.ui.home.formatDate
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 
@@ -45,31 +46,29 @@ fun ExpiredItemsScreen(navController: NavController) {
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
-        db.collection(AppConfig.USERS_COLLECTION)
-            .document(userId)
-            .collection(AppConfig.ITEMS_COLLECTION)
+        db.collection(SharingService.ITEMS_COLLECTION)
+            .whereEqualTo("ownerId", userId)
+            .whereEqualTo("archived", true)
             .addSnapshotListener { result, _ ->
                 result?.let {
                     val list = it.documents.mapNotNull { doc ->
-                        val archived = doc.getBoolean("archived") ?: false
-                        if (archived) {
-                            ExpiryItem(
-                                id = doc.id,
-                                name = doc.getString("name") ?: "",
-                                purchasedDate = doc.getLong("purchasedDate") ?: 0L,
-                                expiryDate = doc.getLong("expiryDate") ?: 0L,
-                                notes = doc.getString("notes") ?: "",
-                                username = doc.getString("username") ?: "",
-                                email = doc.getString("email") ?: "",
-                                password = doc.getString("password") ?: "",
-                                amount = doc.getString("amount") ?: "",
-                                archived = true,
-                                ownerId = doc.getString("ownerId") ?: userId,
-                                sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList()
-                            )
-                        } else null
-                    }
-                    items = list.sortedByDescending { it.expiryDate }
+                        ExpiryItem(
+                            id = doc.id,
+                            itemName = doc.getString("itemName") ?: "",
+                            purchasedDate = doc.getTimestamp("purchasedDate"),
+                            expiryDate = doc.getTimestamp("expiryDate"),
+                            amount = doc.getDouble("amount"),
+                            notes = doc.getString("notes") ?: "",
+                            username = doc.getString("username") ?: "",
+                            email = doc.getString("email") ?: "",
+                            password = doc.getString("password") ?: "",
+                            ownerId = doc.getString("ownerId") ?: userId,
+                            sharedWith = doc.get("sharedWith") as? List<String> ?: emptyList(),
+                            archived = true,
+                            createdAt = doc.getTimestamp("createdAt") ?: Timestamp.now()
+                        )
+                    }.sortedByDescending { it.expiryDate?.toDate()?.time ?: 0 }
+                    items = list
                     isLoading = false
                 }
             }
@@ -160,148 +159,127 @@ fun ExpiredItemsScreen(navController: NavController) {
 
             // ── Expired Item Cards ──
             items(items, key = { it.id }) { item ->
-                ExpiredItemCard(
-                    item = item,
-                    onRestore = {
-                        db.collection(AppConfig.USERS_COLLECTION)
-                            .document(userId)
-                            .collection(AppConfig.ITEMS_COLLECTION)
-                            .document(item.id)
-                            .update("archived", false)
-                        Toast.makeText(context, "${item.name} restored", Toast.LENGTH_SHORT).show()
-                    },
-                    onDelete = {
-                        db.collection(AppConfig.USERS_COLLECTION)
-                            .document(userId)
-                            .collection(AppConfig.ITEMS_COLLECTION)
-                            .document(item.id)
-                            .delete()
-                        Toast.makeText(context, "${item.name} deleted", Toast.LENGTH_SHORT).show()
-                    },
-                    onClick = { navController.navigate("detail/${item.id}/${item.ownerId}") }
-                )
-            }
-        }
-    }
-}
+                val daysExpired = -calculateDaysLeft(item.expiryDate)
 
-@Composable
-private fun ExpiredItemCard(
-    item: ExpiryItem,
-    onRestore: () -> Unit,
-    onDelete: () -> Unit,
-    onClick: () -> Unit
-) {
-    val daysExpired = -calculateDaysLeft(item.expiryDate)
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(20.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.name,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            letterSpacing = (-0.3).sp
-                        ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = Color(0xFF1A237E)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Expired on ${formatDate(item.expiryDate)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF9E9E9E)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFFE53935).copy(alpha = 0.12f)
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = { navController.navigate("detail/${item.id}/${item.ownerId}") }),
+                    shape = RoundedCornerShape(20.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(18.dp)
                     ) {
-                        Icon(
-                            Icons.Outlined.Timer,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = Color(0xFFE53935)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "${daysExpired}d ago",
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = FontWeight.Bold
-                            ),
-                            color = Color(0xFFE53935)
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = item.itemName,
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.SemiBold,
+                                        letterSpacing = (-0.3).sp
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = Color(0xFF1A237E)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Expired on ${formatDate(item.expiryDate)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF9E9E9E)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFFE53935).copy(alpha = 0.12f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Timer,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp),
+                                        tint = Color(0xFFE53935)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "${daysExpired}d ago",
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = Color(0xFFE53935)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Action buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    db.collection(SharingService.ITEMS_COLLECTION)
+                                        .document(item.id)
+                                        .update("archived", false)
+                                    Toast.makeText(context, "${item.itemName} restored", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color(0xFF1565C0)
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Restore,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Restore", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    db.collection(SharingService.ITEMS_COLLECTION)
+                                        .document(item.id)
+                                        .delete()
+                                    Toast.makeText(context, "${item.itemName} deleted", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color(0xFFE53935)
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Outlined.DeleteSweep,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Delete", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                            }
+                        }
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Action buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onRestore,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color(0xFF1565C0)
-                    )
-                ) {
-                    Icon(
-                        Icons.Outlined.Restore,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Restore", fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                }
-
-                OutlinedButton(
-                    onClick = onDelete,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color(0xFFE53935)
-                    )
-                ) {
-                    Icon(
-                        Icons.Outlined.DeleteSweep,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Delete", fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                }
-            }
         }
     }
 }
-
-
