@@ -27,18 +27,30 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "FIRESTORE_USERS_COLLECTION", "\"${localProperties.getProperty("FIRESTORE_USERS_COLLECTION", "")}\"")
         buildConfigField("String", "FIRESTORE_ITEMS_COLLECTION", "\"${localProperties.getProperty("FIRESTORE_ITEMS_COLLECTION", "")}\"")
         buildConfigField("String", "ENCRYPTION_SECRET_KEY", "\"${localProperties.getProperty("ENCRYPTION_SECRET_KEY", "")}\"")
+    }
 
+    // ============================================
+    // SIGNING CONFIGURATION (reads from env vars)
+    // ============================================
+    signingConfigs {
+        create("release") {
+            storeFile = file("keystore.jks")
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
+            keyAlias = System.getenv("KEY_ALIAS") ?: ""
+            keyPassword = System.getenv("KEY_PASSWORD") ?: ""
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")  // <-- ADD THIS
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -46,6 +58,7 @@ android {
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -56,6 +69,17 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    // ============================================
+    // CUSTOM APK FILENAME WITH VERSION NUMBER
+    // ============================================
+    applicationVariants.all {
+        outputs.all {
+            if (this is com.android.build.gradle.internal.api.BaseVariantOutputImpl) {
+                outputFileName = "ExpiryTracker-v${defaultConfig.versionName}.apk"
+            }
+        }
     }
 }
 
@@ -72,7 +96,6 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
 
     implementation("androidx.compose.ui:ui")
-//    implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material3:material3:1.3.0")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.activity:activity-compose:1.8.2")
